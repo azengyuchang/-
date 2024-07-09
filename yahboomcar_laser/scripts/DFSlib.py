@@ -1,5 +1,10 @@
 #!/usr/bin/env python
 # coding:utf-8
+
+#这段代码通过ROS控制机器人移动，使用激光传感器获取周围障碍信息，结合图搜索算法（A*）实现路径规划，使用PID控制器根据视觉反馈调整方向，从而实现基本的自主导航功能。
+
+#导入所需的Python库，如OpenCV、ROS相关库、NumPy等。
+#定义了一些常量和全局变量，如RAD2DEG用于将弧度转换为角度。
 import math
 import numpy as np
 import time
@@ -15,6 +20,7 @@ from std_msgs.msg import String
 import heapq
 RAD2DEG = 180 / math.pi
 
+#初始化ROS节点和激光传感器相关标志位。
 class laser_reader():
     def __init__(self):
         rospy.init_node('laser_reader', anonymous=False)
@@ -22,7 +28,7 @@ class laser_reader():
         self.right_flag = 0
         self.front_flag = 0
         self.back_flag = 0
-        
+#get_message()方法等待并获取激光传感器的消息，更新四个方向的障碍物标志位。        
     def get_message(self):
         sub_laser = rospy.wait_for_message('/scan_anwser', String).data
         self.left_flag = int(sub_laser[1])
@@ -30,7 +36,7 @@ class laser_reader():
         self.front_flag = int(sub_laser[0])
         self.back_flag = int(sub_laser[3])
         return sub_laser
-    
+#check_left()、check_right()、check_front()、check_back()方法用于检查四个方向上是否有障碍物，并打印相关信息。    
     def check_left(self):
         self.get_message()
         if self.left_flag == 1:
@@ -60,7 +66,8 @@ class laser_reader():
         self.ros_ctrl.cancel()
         self.sub_laser.unregister()
         rospy.loginfo("Shutting down this node.")
-
+        
+#turn_left_motor()、turn_right_motor()、go_forward()、go_back_motor()用于控制机器人的运动，通过调用bot对象的方法实现。
 def turn_left_motor(bot):
     st  = time.time()
     bot.set_car_motion(0,0,0.6)
@@ -91,6 +98,7 @@ def go_back_motor(bot):
         a =1
     bot.set_car_motion(0,0,0)
 
+#表示机器人导航中的地图，初始化地图大小和障碍物位置。
 class Graph():
     def __init__(self, length, width):
         self.length = length
@@ -98,7 +106,7 @@ class Graph():
         self.graph = np.zeros((length, width), dtype=int) # 0 means empty, 1 means obstacle
         self.visited = np.zeros((length, width), dtype=int)
         self.checked = np.zeros((length, width), dtype=int)
-
+#set_obstacle()、set_visited()、set_checked()方法用于设置障碍物、已访问和已检查状态
     def set_obstacle(self, x, y):
         self.graph[x, y] = 1
 
@@ -120,7 +128,8 @@ class Graph():
 
     def all_checked(self):
         np.all(self.checked == 1)
-
+        
+#a_star_search()方法实现A*搜索算法，根据当前位置和目标位置计算路径。
     def a_star_search(self, start, goal):
         # Priority queue for the open set
         open_set = []
@@ -150,7 +159,8 @@ class Graph():
                         self.set_checked(neighbor[0], neighbor[1])
 
         return []
-
+        
+#reconstruct_path()方法用于重建路径，get_neighbors()方法获取邻居节点，refresh_check()方法刷新已检查状态。
     def reconstruct_path(self, came_from, current):
         total_path = [current]
         while current in came_from:
@@ -169,12 +179,12 @@ class Graph():
 
     def refresh_check(self):
         self.checked = np.zeros((self.length, self.width), dtype=int)
-
+#表示机器人在地图上的位置和朝向，以及相关操作方法。
 class Car():
     def __init__(self, current, direction):
         self.current = current
         self.direction = direction
-        
+#go()、go_back()、turn_left()、turn_right()方法控制机器人的移动和转向。        
     def go(self, graph, bot, cap):
         go_forward_adjust(bot, cap)
         self.current = [self.current[0] + self.direction[0], self.current[1] + self.direction[1]]
@@ -211,7 +221,7 @@ class Car():
         else:
             self.direction = [0, 1]
         return self.direction
-
+#space_front()、space_left()、space_right()方法获取当前方向的前、左、右相邻位置信息。
     def space_front(self):
         return [self.current[0] + self.direction[0], self.current[1] + self.direction[1]]
 
@@ -234,7 +244,7 @@ class Car():
             return [self.current[0] - 1, self.current[1]]
         else:
             return [self.current[0], self.current[1] - 1]
-
+#go_path()方法按照路径移动机器人
     def go_path(self, path, bot, cap, pid):
         for coordinate in path:
             delta = [coordinate[0] - self.current[0], coordinate[1] - self.current[1]]
@@ -316,7 +326,8 @@ class Car():
             i += 1
         return empty, obstacle
 
-
+#深度优先搜索算法，用于机器人的自主导航。
+#在当前位置周围检查障碍物和空地，选择最合适的移动策略（前进、左转、右转、返回）。
 def DFS(car, graph, laser, bot, cap, pid):
     length = graph.length
     width = graph.width
@@ -408,7 +419,7 @@ def DFS(car, graph, laser, bot, cap, pid):
 
 
 
-
+#处理图像，检测黑线位置，并返回调整方向所需的偏差值。
 def get_dir(img):
     # cv.imshow("img",img)
     # 应用高斯模糊以减少噪声
@@ -490,7 +501,7 @@ def get_dir(img):
     direction_out = np.mean(direction)
     return direction_out,img1
 
-
+#PIDController类用于实现PID控制器，调节机器人运动方向以使黑线居中。
 class PIDController:
     def __init__(self, Kp, Ki, Kd):
         self.Kp = Kp
@@ -561,7 +572,8 @@ def cali_control_bot(center_x, width, bot, pid, prev_time):
         bot.set_car_motion(0,0,0)
     
     return 0
-
+    
+#使用cali_line()函数校准机器人位置
 def cali_line(cap, pid, bot):
     print("start_cali_to_the_line")
     cali_start = time.time()
@@ -607,7 +619,8 @@ def cali_control_bot1(center_x, width, bot, pid, prev_time):
         bot.set_car_motion(0.21,0,0)
     
     return 0
-       
+
+#使用go_forward_adjust()函数控制机器人直行
 def go_forward_adjust(bot,cap):
     # print("gogogo!!!")
     cali_start = time.time()
@@ -646,12 +659,13 @@ def draw_contours(image, contours):
         cv.rectangle(image, (x, y), (x + w, y + h), (0, 255, 0), 2)
     return image
 
-
+#初始化laser_reader、Rosmaster对象，设置PID参数。
 if __name__ == '__main__':
     tracker = laser_reader()
     bot = Rosmaster()
     pid = PIDController(Kp=0.20, Ki=0.0, Kd=0.0)
 
+    #使用OpenCV捕获实时视频图像，初始化地图、车辆位置和方向。
     cap = cv.VideoCapture(1)
     ret,frame = cap.read()
     print(frame.shape)
@@ -665,6 +679,8 @@ if __name__ == '__main__':
     car = Car([0, 0], [0, 1])
     cali_line(cap, pid, bot)
     print('DFS')
+
+    #用DFS()函数进行自主导航，获取路径并移动机器人。
     DFS(car, graph, tracker, bot, cap, pid)
     graph.refresh_check()
     print(graph.graph)
